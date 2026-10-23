@@ -1,0 +1,6 @@
+ultralytics==8.4.184
+onnx==1.23.2
+onnxslim==0.1.98
+onnxruntime-gpu==1.31.0
+tensorrt-cu12==11.4.0.106
+lap==0.5.13
