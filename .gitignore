@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+datasets/
+runs/
+weights/
+logs/
+build/
+*.pt
+*.onnx
+*.engine
+*.plan
+*.cache
+*.mp4
+!docs/media/*.gif
