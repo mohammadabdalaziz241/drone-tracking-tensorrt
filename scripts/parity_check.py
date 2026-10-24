@@ -2,8 +2,9 @@
 
 Both run the SAME TensorRT engine on the same images with the same thresholds, so any
 difference comes from pre-processing (our CUDA letterbox kernel vs OpenCV) or post-processing
-(our NMS vs Ultralytics'). A detection counts as matched if a box of the same class overlaps
-with IoU >= --match-iou.
+(our NMS vs Ultralytics'). Agreement is reported at several IoU thresholds: a strict one
+(0.9) is sensitive to one-pixel box jitter on tiny objects, a loose one (0.5) only counts
+genuinely missing or extra detections.
 
 Example:
   build/trt_bench --engine E --images DIR --max-images 100 --runs 1 --warmup 0 --dump cpp.json
@@ -17,7 +18,8 @@ import json
 from pathlib import Path
 
 import numpy as np
-from ultralytics import YOLO
+
+MATCH_IOUS = (0.5, 0.75, 0.9)
 
 
 def iou_matrix(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -33,53 +35,65 @@ def iou_matrix(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return inter / (area_a[:, None] + area_b[None, :] - inter + 1e-9)
 
 
+def match(ref: np.ndarray, other: np.ndarray, thr: float) -> int:
+    """Greedy one-to-one matching, same class, highest-confidence reference boxes first."""
+    if len(ref) == 0 or len(other) == 0:
+        return 0
+    m = iou_matrix(ref[:, :4], other[:, :4])
+    m[ref[:, 5][:, None] != other[:, 5][None, :]] = 0
+    taken = np.zeros(len(other), dtype=bool)
+    n = 0
+    for i in np.argsort(-ref[:, 4]):
+        row = np.where(taken, -1.0, m[i])
+        j = int(np.argmax(row))
+        if row[j] >= thr:
+            taken[j] = True
+            n += 1
+    return n
+
+
+def to_array(boxes) -> np.ndarray:
+    if len(boxes) == 0:
+        return np.zeros((0, 6))
+    return np.concatenate([boxes.xyxy.cpu().numpy(), boxes.conf.cpu().numpy()[:, None],
+                           boxes.cls.cpu().numpy()[:, None]], axis=1)
+
+
+def agreement(pairs: list[tuple[np.ndarray, np.ndarray]]) -> dict:
+    n_ref = sum(len(a) for a, _ in pairs)
+    n_oth = sum(len(b) for _, b in pairs)
+    out = {"reference_detections": n_ref, "other_detections": n_oth}
+    for thr in MATCH_IOUS:
+        k = sum(match(a, b, thr) for a, b in pairs)
+        out[f"recall@iou{thr}"] = round(k / max(n_ref, 1), 4)
+        out[f"precision@iou{thr}"] = round(k / max(n_oth, 1), 4)
+    return out
+
+
 def main() -> None:
+    from ultralytics import YOLO
+
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--engine", required=True)
     p.add_argument("--images", required=True)
     p.add_argument("--cpp", required=True, help="JSON written by trt_bench --dump")
     p.add_argument("--conf", type=float, default=0.25)
     p.add_argument("--iou", type=float, default=0.45)
-    p.add_argument("--match-iou", type=float, default=0.9)
     p.add_argument("--out", default=None)
     args = p.parse_args()
 
     cpp = json.loads(Path(args.cpp).read_text())
     model = YOLO(args.engine, task="detect")
-    matched = py_total = cpp_total = 0
-    score_diffs, ious = [], []
-    for name, cpp_dets in cpp.items():
+    pairs = []
+    for name, dets in cpp.items():
         r = model.predict(str(Path(args.images) / name), conf=args.conf, iou=args.iou,
                           max_det=300, agnostic_nms=False, verbose=False)[0]
-        py = np.concatenate([r.boxes.xyxy.cpu().numpy(), r.boxes.conf.cpu().numpy()[:, None],
-                             r.boxes.cls.cpu().numpy()[:, None]], axis=1) if len(r.boxes) else np.zeros((0, 6))
-        cc = np.array(cpp_dets, dtype=float).reshape(-1, 6)
-        py_total += len(py)
-        cpp_total += len(cc)
-        m = iou_matrix(py[:, :4], cc[:, :4])
-        m[py[:, 5][:, None] != cc[:, 5][None, :]] = 0  # same class only
-        used = set()
-        for i in np.argsort(-py[:, 4]):
-            if m.shape[1] == 0:
-                break
-            j = int(np.argmax(np.where([k in used for k in range(m.shape[1])], -1, m[i])))
-            if m[i, j] >= args.match_iou and j not in used:
-                used.add(j)
-                matched += 1
-                ious.append(m[i, j])
-                score_diffs.append(abs(py[i, 4] - cc[j, 4]))
+        pairs.append((to_array(r.boxes), np.array(dets, dtype=float).reshape(-1, 6)))
 
-    summary = {
-        "engine": args.engine,
-        "images": len(cpp),
-        "python_detections": py_total,
-        "cpp_detections": cpp_total,
-        "matched": matched,
-        "recall_of_python_by_cpp": round(matched / max(py_total, 1), 4),
-        "precision_of_cpp_vs_python": round(matched / max(cpp_total, 1), 4),
-        "mean_iou_of_matches": round(float(np.mean(ious)), 4) if ious else None,
-        "mean_abs_score_diff": round(float(np.mean(score_diffs)), 5) if score_diffs else None,
-    }
+    summary = {"engine": args.engine, "images": len(cpp), "reference": "python", **agreement(pairs)}
+    # Backwards-compatible keys used by run_stage3.sh's table.
+    summary["recall_of_python_by_cpp"] = summary["recall@iou0.9"]
+    summary["precision_of_cpp_vs_python"] = summary["precision@iou0.9"]
     print(json.dumps(summary, indent=2))
     if args.out:
         Path(args.out).write_text(json.dumps(summary, indent=2))
