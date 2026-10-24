@@ -1,7 +1,7 @@
 #pragma once
 
 #include <NvInfer.h>
-#include <cuda_runtime_api.h>
+#include <cuda_runtime.h>  // C++ overloads, e.g. cudaMalloc(T**, size_t)
 
 #include <memory>
 #include <opencv2/core.hpp>
