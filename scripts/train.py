@@ -34,26 +34,31 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--name", required=True, help="run name, e.g. yolo11s_640")
     parser.add_argument("--project", default=str(ROOT / "runs" / "detect"))
+    parser.add_argument("--resume", action="store_true", help="continue from <project>/<name>/weights/last.pt")
     args = parser.parse_args()
 
     started = time.time()
-    model = YOLO(args.model)
-    results = model.train(
-        data=args.data,
-        imgsz=args.imgsz,
-        epochs=args.epochs,
-        batch=args.batch,
-        workers=args.workers,
-        seed=args.seed,
-        deterministic=True,
-        patience=30,
-        cos_lr=True,
-        close_mosaic=10,
-        project=args.project,
-        name=args.name,
-        exist_ok=True,
-        plots=True,
-    )
+    last = Path(args.project) / args.name / "weights" / "last.pt"
+    if args.resume and last.exists():
+        print(f"Resuming from {last}", flush=True)
+        results = YOLO(str(last)).train(resume=True)
+    else:
+        results = YOLO(args.model).train(
+            data=args.data,
+            imgsz=args.imgsz,
+            epochs=args.epochs,
+            batch=args.batch,
+            workers=args.workers,
+            seed=args.seed,
+            deterministic=True,
+            patience=30,
+            cos_lr=True,
+            close_mosaic=10,
+            project=args.project,
+            name=args.name,
+            exist_ok=True,
+            plots=True,
+        )
 
     run_dir = Path(results.save_dir)
     summary = {
@@ -68,7 +73,7 @@ def main() -> None:
         "per_class_map50_95": {
             results.names[i]: float(v) for i, v in enumerate(results.box.maps)
         },
-        "train_hours": round((time.time() - started) / 3600, 2),
+        "train_hours_this_session": round((time.time() - started) / 3600, 2),
         "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu",
         "torch": torch.__version__,
         "python": platform.python_version(),
