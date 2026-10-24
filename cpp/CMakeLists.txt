@@ -29,7 +29,9 @@ add_executable(trt_bench
   src/detector.cpp
   src/preprocess.cu
 )
-target_include_directories(trt_bench PRIVATE src ${TRT_INCLUDE} ${OpenCV_INCLUDE_DIRS})
+target_include_directories(trt_bench PRIVATE src)
+# SYSTEM: silence warnings coming from third-party headers
+target_include_directories(trt_bench SYSTEM PRIVATE ${TRT_INCLUDE} ${OpenCV_INCLUDE_DIRS})
 target_link_libraries(trt_bench PRIVATE ${TRT_LIB} CUDA::cudart ${OpenCV_LIBS})
 target_compile_options(trt_bench PRIVATE
   $<$<COMPILE_LANGUAGE:CXX>:-O3 -Wall -Wextra>
