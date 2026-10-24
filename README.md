@@ -1,37 +1,136 @@
 # Drone small-object detection and tracking with TensorRT
 
-> **Status: in progress.** Results are added here as each stage is completed and measured.
+> **Status:** stages 1–3 complete (detection, TensorRT export, C++/CUDA engine). Tracking (stage 4) in progress.
 
-Detecting and tracking small objects (pedestrians, vehicles) in aerial drone video is hard: objects are often under 32×32 pixels, crowded, and seen from unusual angles. This project builds a full pipeline for it, from fine-tuning a detector to a deployed C++/CUDA TensorRT tracker, and measures what every optimisation step gains and costs.
+Detecting and tracking small objects (pedestrians, vehicles) in aerial drone video is hard: objects are often under 32×32 pixels, crowded, and seen from unusual angles. This project builds the full pipeline, from fine-tuning a detector to a deployed C++/CUDA TensorRT engine, and measures what every step gains and costs.
+
+## Headline
+
+On an RTX 4000 Ada at batch 1, the final pipeline (YOLO11s at 1280 px, TensorRT FP16, C++ with a fused CUDA pre-processing kernel) runs at **3.9 ms per frame (257 FPS) with 0.327 mAP50-95**. The naive baseline (YOLO11s at 640 px, PyTorch, Python) takes 4.8 ms for 0.224 mAP50-95. The deployed pipeline is **46% more accurate and also faster** than the baseline.
+
+| Pipeline | Input | mAP50-95 | Latency (ms) | FPS |
+|---|---:|---:|---:|---:|
+| PyTorch, Python (baseline) | 640 | 0.224 | 4.81 | 208 |
+| PyTorch, Python | 1280 | 0.331 | 9.05 | 110 |
+| TensorRT FP16, Python | 1280 | 0.327 | 6.88 | 145 |
+| **TensorRT FP16, C++ + CUDA pre-processing** | **1280** | **0.327** | **3.89** | **257** |
+| TensorRT INT8, C++ + CUDA pre-processing | 1280 | 0.316 | 2.80 | 357 |
+
+Latency is end to end per frame: upload, pre-processing, inference, download and NMS. JPEG decoding is excluded. Each figure is the median of 300 timed runs after 50 warm-up runs on VisDrone validation images. mAP is measured with the Ultralytics validator on the VisDrone-DET validation set (548 images).
+
+## Stage 1: resolution matters most for small objects
+
+Fine-tuning YOLO11s (COCO-pretrained) on VisDrone-DET for 100 epochs:
+
+| Input | mAP50 | mAP50-95 |
+|---:|---:|---:|
+| 640 | 0.393 | 0.225 |
+| 1280 | **0.546** | **0.335** (+49% relative) |
+
+Every class improves, and the smallest objects gain the most in relative terms:
+
+| Class | 640 | 1280 | Gain |
+|---|---:|---:|---:|
+| pedestrian | 0.186 | 0.327 | +0.141 (+76%) |
+| people | 0.115 | 0.213 | +0.098 |
+| bicycle | 0.055 | 0.169 | +0.114 (×3.1) |
+| car | 0.540 | 0.635 | +0.095 |
+| van | 0.310 | 0.404 | +0.095 |
+| truck | 0.235 | 0.334 | +0.099 |
+| tricycle | 0.152 | 0.265 | +0.113 |
+| awning-tricycle | 0.086 | 0.133 | +0.047 |
+| bus | 0.376 | 0.547 | +0.171 |
+| motor | 0.198 | 0.319 | +0.120 |
+
+The cost is four times as many pixels per frame. Stages 2 and 3 win that back.
+
+## Stage 2: TensorRT export (Python)
+
+Same weights, same validation set, batch 1, measured through the Ultralytics Python API:
+
+| Model | Format | mAP50-95 | Δ | Median ms | Speed-up |
+|---|---|---:|---:|---:|---:|
+| 640 | PyTorch | 0.2235 | | 4.81 | 1.00× |
+| 640 | TensorRT FP16 | 0.2229 | −0.0006 | 3.80 | 1.27× |
+| 640 | TensorRT INT8 | 0.2152 | −0.0083 | 3.55 | 1.35× |
+| 1280 | PyTorch | 0.3313 | | 9.05 | 1.00× |
+| 1280 | TensorRT FP16 | 0.3272 | −0.0041 | 6.88 | 1.32× |
+| 1280 | TensorRT INT8 | 0.3156 | −0.0157 | 5.81 | 1.56× |
+
+FP16 is effectively lossless. INT8 (post-training calibration on 25% of the training set) costs 3.7–4.7% mAP. The speed-ups are modest because Python pre- and post-processing dominate at batch 1, which is what Stage 3 addresses. ONNX Runtime results are not reported: in this environment it fell back to CPU execution, so its timings are not comparable.
+
+## Stage 3: C++ engine with a fused CUDA pre-processing kernel
+
+`cpp/` is a standalone C++17 TensorRT runner:
+- **One fused CUDA kernel** performs bilinear resize, letterbox padding, BGR→RGB, normalisation and HWC→CHW in a single pass, replacing several OpenCV/NumPy CPU operations.
+- **TensorRT `enqueueV3`** on a dedicated stream, with pinned host buffers.
+- **Decoding and class-aware NMS** on the CPU.
+- **Per-stage timing** with CUDA events.
+
+Median per-stage latency in ms (300 runs):
+
+| Engine | Upload | Pre-proc (CUDA) | Inference | Download | Post-proc | Total | p95 | FPS |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 640 FP16 | 0.11 | 0.01 | 1.16 | 0.03 | 0.05 | 1.57 | 2.17 | 637 |
+| 640 INT8 | 0.12 | 0.01 | 0.88 | 0.03 | 0.05 | 1.27 | 1.87 | 786 |
+| 1280 FP16 | 0.12 | 0.04 | 3.19 | 0.12 | 0.16 | 3.91 | 4.50 | 256 |
+| 1280 INT8 | 0.11 | 0.04 | 2.09 | 0.11 | 0.17 | 2.80 | 3.39 | 358 |
+
+The custom kernel makes pre-processing essentially free (0.04 ms at 1280), so 82% of the remaining time is the network itself. Moving the same FP16 engine from Python to C++ makes it **1.8× faster** (6.88 → 3.89 ms).
+
+### Correctness: C++ vs Python parity, and an INT8 finding
+
+To check the C++ pipeline, its detections are compared with the Python path running the same engine (100 validation images, conf 0.25, NMS IoU 0.45). Agreement is the fraction of Python detections matched by a same-class C++ box at the given IoU:
+
+| Engine | IoU ≥ 0.5 | IoU ≥ 0.75 | IoU ≥ 0.9 |
+|---|---:|---:|---:|
+| 640 FP16 | 0.995 | 0.994 | 0.987 |
+| 640 INT8 | 0.947 | 0.928 | 0.806 |
+| 1280 FP16 | 0.996 | 0.996 | 0.986 |
+| 1280 INT8 | 0.938 | 0.923 | 0.740 |
+
+FP16 agrees almost perfectly. INT8 agrees noticeably less, even though both paths run the same engine file with identical thresholds and fixed input shapes. To find out why, each engine was run on every image and on a copy with invisible ±1 pixel-value noise:
+
+| Engine | IoU ≥ 0.5 | IoU ≥ 0.75 | IoU ≥ 0.9 |
+|---|---:|---:|---:|
+| 640 FP16 | 0.988 | 0.986 | 0.969 |
+| 640 INT8 | 0.934 | 0.908 | 0.739 |
+| 1280 FP16 | 0.990 | 0.989 | 0.970 |
+| 1280 INT8 | 0.938 | 0.923 | 0.733 |
+
+The C++/Python disagreement for INT8 matches the INT8 engine's own sensitivity to imperceptible noise (0.740 vs 0.733 at IoU 0.9). So the C++ pipeline is correct, and the gap is a property of the quantised model. **Post-training INT8 makes this small-object detector fragile**: ±1 intensity noise changes about 6% of its detections outright and shifts the box edges on about 27% of them, against 1% and 3% for FP16. Tiny objects sit right at the resolution limit of the quantised activations. FP16 is therefore the deployment default here. Better INT8 (more calibration data, keeping sensitive layers in FP16, or explicit Q/DQ quantisation) is left for the Jetson stage, where the extra speed matters.
 
 ## Plan
 
-| Stage | What | Measured |
+| Stage | What | Status |
 |---|---|---|
-| 1 | Fine-tune YOLO11s on VisDrone-DET at 640 vs 1280 input | mAP50-95, per-class and small-object AP |
-| 2 | Export to ONNX and TensorRT (FP32, FP16, INT8 with calibration) | accuracy drop vs latency and throughput |
-| 3 | C++ inference engine with custom CUDA pre-processing and NMS | end-to-end FPS, per-stage latency |
-| 4 | ByteTrack multi-object tracking on VisDrone-MOT | HOTA, IDF1, MOTA, ID switches |
-| 5 | Multi-threaded pipeline (decode, infer, track in parallel) | sustained FPS on real video |
-| Stretch | Jetson Orin deployment; camera calibration for real-world units | edge FPS and power |
+| 1 | Fine-tune YOLO11s on VisDrone-DET at 640 vs 1280 | ✅ |
+| 2 | Export to ONNX / TensorRT FP16 / INT8; accuracy vs latency | ✅ |
+| 3 | C++ engine, fused CUDA pre-processing, per-stage timing, parity | ✅ |
+| 4 | ByteTrack multi-object tracking on VisDrone-MOT (HOTA, IDF1, MOTA, ID switches) | in progress |
+| 5 | Multi-threaded pipeline (decode, infer, track in parallel) on real video | planned |
+| Stretch | Jetson Orin deployment with improved INT8; camera calibration | planned |
 
-## Setup
+## Reproduce
 
-Tested on an NVIDIA RTX 4000 Ada (20 GB), CUDA 12.9, Python 3.12.
+Tested on an NVIDIA RTX 4000 Ada (20 GB), CUDA 12.9, TensorRT 11.4, Python 3.12, Ubuntu 24.04.
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 pip install -r requirements.txt
+
+bash scripts/run_stage1_training.sh                    # stage 1: 640 and 1280 (resumable)
+python scripts/export_and_benchmark.py --weights runs/detect/yolo11s_1280/weights/best.pt --imgsz 1280   # stage 2
+bash scripts/run_stage3.sh                             # stage 3: C++ benchmarks + parity (GPU must be idle)
+bash scripts/run_int8_diagnosis.sh                     # multi-threshold parity + noise sensitivity
 ```
 
-VisDrone-DET (about 2.3 GB) downloads automatically on first training run.
+VisDrone-DET (about 2.3 GB) downloads automatically on the first training run.
 
 ### Building the C++ engine
 
-Needs CUDA 12.x, OpenCV 4 and the TensorRT headers of the **same version** as the Python
-TensorRT package that built the engines (headers: `git clone --branch v11.4 --sparse https://github.com/NVIDIA/TensorRT`, then `sparse-checkout set include`).
-Use the compiler OpenCV was built with (on Ubuntu 24.04, the system GCC 13):
+Needs CUDA 12.x, OpenCV 4 and the TensorRT headers of the **same version** as the Python TensorRT package that built the engines (`git clone --branch v11.4 --sparse https://github.com/NVIDIA/TensorRT`, then `git sparse-checkout set include`). Use the compiler OpenCV was built with (on Ubuntu 24.04, the system GCC 13):
 
 ```bash
 cmake -S cpp -B build -DCMAKE_CXX_COMPILER=/usr/bin/g++ -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++ \
@@ -39,14 +138,6 @@ cmake -S cpp -B build -DCMAKE_CXX_COMPILER=/usr/bin/g++ -DCMAKE_CUDA_HOST_COMPIL
   -DTENSORRT_LIB_DIR=<venv>/lib/python3.12/site-packages/tensorrt_libs
 cmake --build build -j
 ```
-
-## Stage 1: detector fine-tuning
-
-```bash
-bash scripts/run_stage1_training.sh     # 640 baseline, then 1280 small-object model
-```
-
-Each run writes a JSON summary to `results/`.
 
 ## Data
 
