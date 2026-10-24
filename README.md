@@ -27,6 +27,19 @@ pip install -r requirements.txt
 
 VisDrone-DET (about 2.3 GB) downloads automatically on first training run.
 
+### Building the C++ engine
+
+Needs CUDA 12.x, OpenCV 4 and the TensorRT headers of the **same version** as the Python
+TensorRT package that built the engines (headers: `git clone --branch v11.4 --sparse https://github.com/NVIDIA/TensorRT`, then `sparse-checkout set include`).
+Use the compiler OpenCV was built with (on Ubuntu 24.04, the system GCC 13):
+
+```bash
+cmake -S cpp -B build -DCMAKE_CXX_COMPILER=/usr/bin/g++ -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++ \
+  -DTENSORRT_INCLUDE_DIR=<TensorRT>/include \
+  -DTENSORRT_LIB_DIR=<venv>/lib/python3.12/site-packages/tensorrt_libs
+cmake --build build -j
+```
+
 ## Stage 1: detector fine-tuning
 
 ```bash
