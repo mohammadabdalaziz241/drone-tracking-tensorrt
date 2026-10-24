@@ -41,9 +41,11 @@ __global__ void letterbox_kernel(const uint8_t* __restrict__ src, int src_w, int
     const uint8_t* p01 = src + y0 * src_pitch + x1 * 3;
     const uint8_t* p10 = src + y1 * src_pitch + x0 * 3;
     const uint8_t* p11 = src + y1 * src_pitch + x1 * 3;
-    b = w00 * p00[0] + w01 * p01[0] + w10 * p10[0] + w11 * p11[0];
-    g = w00 * p00[1] + w01 * p01[1] + w10 * p10[1] + w11 * p11[1];
-    r = w00 * p00[2] + w01 * p01[2] + w10 * p10[2] + w11 * p11[2];
+    // cv::resize on 8-bit images rounds the interpolated value back to uint8; do the same so
+    // the network sees bit-identical inputs to the Python/OpenCV path.
+    b = rintf(w00 * p00[0] + w01 * p01[0] + w10 * p10[0] + w11 * p11[0]);
+    g = rintf(w00 * p00[1] + w01 * p01[1] + w10 * p10[1] + w11 * p11[1]);
+    r = rintf(w00 * p00[2] + w01 * p01[2] + w10 * p10[2] + w11 * p11[2]);
   }
   const int plane = dst_w * dst_h;
   const int idx = y * dst_w + x;
