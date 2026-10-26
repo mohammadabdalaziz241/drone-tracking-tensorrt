@@ -1,6 +1,6 @@
 # Drone small-object detection and tracking with TensorRT
 
-> **Status:** stages 1–3 complete (detection, TensorRT export, C++/CUDA engine). Tracking (stage 4) in progress.
+> **Status:** stages 1–4 complete on the validation split (detection, TensorRT export, C++/CUDA engine, tracking). Test-dev confirmation of the tracking results and the multi-threaded C++ pipeline (stage 5) are in progress.
 
 Detecting and tracking small objects (pedestrians, vehicles) in aerial drone video is hard: objects are often under 32×32 pixels, crowded, and seen from unusual angles. This project builds the full pipeline, from fine-tuning a detector to a deployed C++/CUDA TensorRT engine, and measures what every step gains and costs.
 
@@ -100,6 +100,38 @@ FP16 agrees almost perfectly. INT8 agrees noticeably less, even though both path
 
 The C++/Python disagreement for INT8 matches the INT8 engine's own sensitivity to imperceptible noise (0.740 vs 0.733 at IoU 0.9). So the C++ pipeline is correct, and the gap is a property of the quantised model. **Post-training INT8 makes this small-object detector fragile**: ±1 intensity noise changes about 6% of its detections outright and shifts the box edges on about 27% of them, against 1% and 3% for FP16. Tiny objects sit right at the resolution limit of the quantised activations. FP16 is therefore the deployment default here. Better INT8 (more calibration data, keeping sensitive layers in FP16, or explicit Q/DQ quantisation) is left for the Jetson stage, where the extra speed matters.
 
+## Stage 4: multi-object tracking on VisDrone2019-MOT
+
+Detections are linked across frames by a tracker, and the result is scored with [TrackEval](https://github.com/JonathonLuiten/TrackEval) (HOTA, CLEAR/MOTA, Identity/IDF1) on the 7 validation sequences (2,846 frames, 72,690 evaluated boxes). Following the VisDrone-MOT protocol, the five evaluated categories (pedestrian, car, van, truck, bus) are scored class-agnostically, and predictions mostly inside annotated *ignored regions* are removed. Both detectors run as TensorRT FP16 engines.
+
+### Ablation: detector resolution × camera-motion compensation (default thresholds)
+
+| Detector | Tracker | HOTA | DetA | AssA | MOTA | IDF1 | ID switches | FPS (Python) |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| 640 | ByteTrack | 41.6 | 37.5 | 48.0 | 30.7 | 48.5 | 1,226 | 88.7 |
+| 640 | BoT-SORT (CMC) | 47.1 | 38.8 | 59.0 | 31.3 | 56.6 | 702 | 41.1 |
+| 1280 | ByteTrack | 44.4 | 39.6 | 51.8 | 27.0 | 52.4 | 1,175 | 65.8 |
+| 1280 | BoT-SORT (CMC) | 48.9 | 40.3 | 61.5 | 26.1 | 59.5 | 498 | 36.6 |
+
+- **Camera-motion compensation is the biggest single gain.** The drone's own motion makes every object jump between frames. BoT-SORT's global motion compensation (sparse optical flow) cuts ID switches by 43–58% and raises association accuracy (AssA) by about 10 points, with either detector. It costs speed, because motion is estimated on every full-resolution frame on the CPU.
+- **The 1280 detector improves detection (DetA) and identity (IDF1)**, but at default thresholds MOTA *drops*. The breakdown explains why: 1280 finds 22% more true objects and misses 32% fewer (FN 29,310 → 19,863), but adds 68% more false positives (FP 19,819 → 33,342). MOTA weighs every error equally, so the extra false positives dominate. HOTA balances detection and association, so it still improves.
+
+### Tuning the tracker's confidence thresholds (1280 + BoT-SORT)
+
+`track_high_thresh` and `new_track_thresh` are raised together from the Ultralytics default of 0.25:
+
+| Threshold | HOTA | MOTA | IDF1 | ID switches | Det. precision | Det. recall |
+|---:|---:|---:|---:|---:|---:|---:|
+| 0.25 (default) | 48.9 | 26.1 | 59.5 | 498 | 49.8 | 59.1 |
+| 0.35 | 49.8 | 30.0 | 61.0 | 394 | 51.6 | 58.9 |
+| 0.45 | 51.8 | 38.4 | 64.9 | 247 | 55.8 | 57.6 |
+| 0.55 | 53.1 | 44.1 | 66.8 | 181 | 59.8 | 56.0 |
+| **0.65** | **53.2** | **47.3** | **67.0** | **116** | 64.2 | 52.5 |
+
+Against the baseline (640 + ByteTrack, default thresholds), the tuned pipeline improves every metric: **HOTA 41.6 → 53.2, MOTA 30.7 → 47.3, IDF1 48.5 → 67.0, and ID switches −91% (1,226 → 116).**
+
+> **Caveat:** the threshold was selected on the same validation split reported here, so these validation numbers are optimistic. The selection rule (maximum HOTA → 0.65) is fixed before evaluating on VisDrone2019-MOT **test-dev**, which is used exactly once to confirm the baseline, the ablation and the final configuration.
+
 ## Plan
 
 | Stage | What | Status |
@@ -107,7 +139,7 @@ The C++/Python disagreement for INT8 matches the INT8 engine's own sensitivity t
 | 1 | Fine-tune YOLO11s on VisDrone-DET at 640 vs 1280 | ✅ |
 | 2 | Export to ONNX / TensorRT FP16 / INT8; accuracy vs latency | ✅ |
 | 3 | C++ engine, fused CUDA pre-processing, per-stage timing, parity | ✅ |
-| 4 | ByteTrack multi-object tracking on VisDrone-MOT (HOTA, IDF1, MOTA, ID switches) | in progress |
+| 4 | Tracking on VisDrone-MOT: detector × camera-motion ablation, threshold tuning (val) | ✅ (test-dev confirmation pending) |
 | 5 | Multi-threaded pipeline (decode, infer, track in parallel) on real video | planned |
 | Stretch | Jetson Orin deployment with improved INT8; camera calibration | planned |
 
@@ -124,6 +156,8 @@ bash scripts/run_stage1_training.sh                    # stage 1: 640 and 1280 (
 python scripts/export_and_benchmark.py --weights runs/detect/yolo11s_1280/weights/best.pt --imgsz 1280   # stage 2
 bash scripts/run_stage3.sh                             # stage 3: C++ benchmarks + parity (GPU must be idle)
 bash scripts/run_int8_diagnosis.sh                     # multi-threshold parity + noise sensitivity
+bash scripts/run_stage4.sh                             # stage 4: tracking ablation on VisDrone-MOT val
+bash scripts/run_stage4_sweep.sh                       # stage 4b: tracker threshold sweep
 ```
 
 VisDrone-DET (about 2.3 GB) downloads automatically on the first training run.
@@ -141,4 +175,4 @@ cmake --build build -j
 
 ## Data
 
-[VisDrone2019](https://github.com/VisDrone/VisDrone-Dataset) (Zhu et al., TPAMI 2021): 6,471 training and 548 validation images, 10 classes.
+[VisDrone2019](https://github.com/VisDrone/VisDrone-Dataset) (Zhu et al., TPAMI 2021). Detection: 6,471 training and 548 validation images, 10 classes. Tracking: VisDrone2019-MOT validation, 7 sequences.
