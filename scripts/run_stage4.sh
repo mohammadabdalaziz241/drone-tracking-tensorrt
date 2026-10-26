@@ -9,11 +9,14 @@ cd "$ROOT"
 mkdir -p results/stage4
 
 # TrackEval (not on PyPI); patch the NumPy aliases removed in NumPy >= 1.24.
-if ! "$PY" -c "import trackeval" 2>/dev/null; then
+"$PY" -m pip install -q pycocotools  # optional TrackEval dependency; avoids an import warning
+if ! "$PY" -c "import importlib.util as u, sys; sys.exit(u.find_spec('trackeval') is None)"; then
   "$PY" -m pip install -q "git+https://github.com/JonathonLuiten/TrackEval.git"
 fi
-TE="$("$PY" -c 'import trackeval, os; print(os.path.dirname(trackeval.__file__))')"
-grep -rlE "np\.(float|int|bool)\b" "$TE" | xargs -r sed -i -E 's/np\.float\b/float/g; s/np\.int\b/int/g; s/np\.bool\b/bool/g'
+# Locate the package WITHOUT importing it (importing prints warnings to stdout).
+TE="$("$PY" -c "import importlib.util as u; print(u.find_spec('trackeval').submodule_search_locations[0])")"
+echo "TrackEval at: $TE"
+grep -rlE "np\.(float|int|bool)\b" "$TE" | xargs -r sed -i -E 's/np\.float\b/float/g; s/np\.int\b/int/g; s/np\.bool\b/bool/g' || true
 
 "$PY" scripts/mot_prepare_gt.py
 
