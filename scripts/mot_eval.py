@@ -16,6 +16,7 @@ import trackeval
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--trackers", nargs="+", required=True)
+    p.add_argument("--split", default="val", help="val or test-dev")
     p.add_argument("--eval-root", default="/scratch/ma06314/drone-tracking/mot_eval")
     p.add_argument("--out", default=None)
     args = p.parse_args()
@@ -26,8 +27,8 @@ def main() -> None:
                          OUTPUT_DETAILED=False, PLOT_CURVES=False, TIME_PROGRESS=False, OUTPUT_EMPTY_CLASSES=False))
     ds_cfg = trackeval.datasets.MotChallenge2DBox.get_default_dataset_config()
     ds_cfg.update(dict(GT_FOLDER=str(root / "gt"), TRACKERS_FOLDER=str(root / "trackers"),
-                       BENCHMARK="VisDrone", SPLIT_TO_EVAL="val", TRACKERS_TO_EVAL=args.trackers,
-                       SEQMAP_FILE=str(root / "gt" / "seqmaps" / "VisDrone-val.txt"),
+                       BENCHMARK="VisDrone", SPLIT_TO_EVAL=args.split, TRACKERS_TO_EVAL=args.trackers,
+                       SEQMAP_FILE=str(root / "gt" / "seqmaps" / f"VisDrone-{args.split}.txt"),
                        CLASSES_TO_EVAL=["pedestrian"], DO_PREPROC=False, PRINT_CONFIG=False))
 
     res, _ = trackeval.Evaluator(eval_cfg).evaluate(
@@ -37,7 +38,7 @@ def main() -> None:
     rows = {}
     for name in args.trackers:
         r = res["MotChallenge2DBox"][name]["COMBINED_SEQ"]["pedestrian"]
-        run = json.loads((root / "trackers" / "VisDrone-val" / name / "run.json").read_text())
+        run = json.loads((root / "trackers" / f"VisDrone-{args.split}" / name / "run.json").read_text())
         rows[name] = {
             "HOTA": round(100 * float(r["HOTA"]["HOTA"].mean()), 2),
             "DetA": round(100 * float(r["HOTA"]["DetA"].mean()), 2),

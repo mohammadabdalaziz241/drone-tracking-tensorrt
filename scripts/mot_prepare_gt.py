@@ -9,10 +9,10 @@ truck, bus), class-agnostically. Ignored regions are saved separately so that pr
 falling inside them can be removed before evaluation.
 
 Output:
-  <out>/gt/VisDrone-val/<seq>/gt/gt.txt        frame,id,x,y,w,h,1,1,1
-  <out>/gt/VisDrone-val/<seq>/seqinfo.ini
-  <out>/gt/seqmaps/VisDrone-val.txt
-  <out>/ignored_regions.json                    {seq: {frame: [[x, y, w, h], ...]}}
+  <out>/gt/VisDrone-<split>/<seq>/gt/gt.txt        frame,id,x,y,w,h,1,1,1
+  <out>/gt/VisDrone-<split>/<seq>/seqinfo.ini
+  <out>/gt/seqmaps/VisDrone-<split>.txt
+  <out>/ignored_regions_<split>.json                {seq: {frame: [[x, y, w, h], ...]}}
 """
 
 from __future__ import annotations
@@ -30,14 +30,15 @@ IGNORED_REGION = 0
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--visdrone", default="/scratch/ma06314/drone-tracking/datasets/VisDrone-MOT/VisDrone2019-MOT-val")
+    p.add_argument("--split", default="val", help="val or test-dev")
+    p.add_argument("--visdrone", default=None, help="defaults to datasets/VisDrone-MOT/VisDrone2019-MOT-<split>")
     p.add_argument("--out", default="/scratch/ma06314/drone-tracking/mot_eval")
     args = p.parse_args()
 
-    root = Path(args.visdrone)
+    root = Path(args.visdrone or f"/scratch/ma06314/drone-tracking/datasets/VisDrone-MOT/VisDrone2019-MOT-{args.split}")
     out = Path(args.out)
-    gt_split = out / "gt" / "VisDrone-val"
-    seqmap = out / "gt" / "seqmaps" / "VisDrone-val.txt"
+    gt_split = out / "gt" / f"VisDrone-{args.split}"
+    seqmap = out / "gt" / "seqmaps" / f"VisDrone-{args.split}.txt"
     seqmap.parent.mkdir(parents=True, exist_ok=True)
 
     ignored = {}
@@ -68,7 +69,7 @@ def main() -> None:
               f"{len(np.unique(rows[:, 1]))} tracks, {int((cat == IGNORED_REGION).sum())} ignored-region boxes")
 
     seqmap.write_text("name\n" + "\n".join(seqs) + "\n")
-    (out / "ignored_regions.json").write_text(json.dumps(ignored))
+    (out / f"ignored_regions_{args.split}.json").write_text(json.dumps(ignored))
     print(f"\n{len(seqs)} sequences, {total_boxes} evaluated boxes -> {out}")
 
 
