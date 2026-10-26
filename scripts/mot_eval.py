@@ -45,6 +45,11 @@ def main() -> None:
             "MOTA": round(100 * float(r["CLEAR"]["MOTA"]), 2),
             "IDF1": round(100 * float(r["Identity"]["IDF1"]), 2),
             "IDSW": int(r["CLEAR"]["IDSW"]),
+            "TP": int(r["CLEAR"]["CLR_TP"]),
+            "FP": int(r["CLEAR"]["CLR_FP"]),
+            "FN": int(r["CLEAR"]["CLR_FN"]),
+            "DetPr": round(100 * float(r["HOTA"]["DetPr"].mean()), 2),
+            "DetRe": round(100 * float(r["HOTA"]["DetRe"].mean()), 2),
             "FPS": run["fps_end_to_end_python"],
         }
 
@@ -52,6 +57,10 @@ def main() -> None:
     print("|---|---:|---:|---:|---:|---:|---:|---:|")
     for n, m in rows.items():
         print(f"| {n} | {m['HOTA']} | {m['DetA']} | {m['AssA']} | {m['MOTA']} | {m['IDF1']} | {m['IDSW']} | {m['FPS']} |")
+    print("\n| Run | TP | FP | FN | Det. precision | Det. recall |")
+    print("|---|---:|---:|---:|---:|---:|")
+    for n, m in rows.items():
+        print(f"| {n} | {m['TP']} | {m['FP']} | {m['FN']} | {m['DetPr']} | {m['DetRe']} |")
     if args.out:
         Path(args.out).write_text(json.dumps(rows, indent=2))
 
