@@ -1,12 +1,14 @@
 # Drone small-object detection and tracking with TensorRT
 
-> **Status:** stages 1–4 complete on the validation split (detection, TensorRT export, C++/CUDA engine, tracking). Test-dev confirmation of the tracking results and the multi-threaded C++ pipeline (stage 5) are in progress.
+> **Status:** stages 1–4 complete (detection, TensorRT export, C++/CUDA engine, tracking confirmed on a held-out test set). Stage 5, a multi-threaded C++ tracking pipeline, is in progress.
 
 Detecting and tracking small objects (pedestrians, vehicles) in aerial drone video is hard: objects are often under 32×32 pixels, crowded, and seen from unusual angles. This project builds the full pipeline, from fine-tuning a detector to a deployed C++/CUDA TensorRT engine, and measures what every step gains and costs.
 
 ## Headline
 
-On an RTX 4000 Ada at batch 1, the final pipeline (YOLO11s at 1280 px, TensorRT FP16, C++ with a fused CUDA pre-processing kernel) runs at **3.9 ms per frame (257 FPS) with 0.327 mAP50-95**. The naive baseline (YOLO11s at 640 px, PyTorch, Python) takes 4.8 ms for 0.224 mAP50-95. The deployed pipeline is **46% more accurate and also faster** than the baseline.
+**Tracking (VisDrone2019-MOT test-dev, held out until the end):** the final pipeline (YOLO11s at 1280 px as a TensorRT FP16 engine, BoT-SORT with camera-motion compensation, thresholds tuned on validation) reaches **HOTA 53.7, MOTA 54.2 and IDF1 69.9 with 89% fewer ID switches** than the baseline (640 px detector + ByteTrack: HOTA 41.0, MOTA 33.2, IDF1 48.7), at 49 FPS end to end in Python.
+
+**Detection speed:** on an RTX 4000 Ada at batch 1, the final pipeline (YOLO11s at 1280 px, TensorRT FP16, C++ with a fused CUDA pre-processing kernel) runs at **3.9 ms per frame (257 FPS) with 0.327 mAP50-95**. The naive baseline (YOLO11s at 640 px, PyTorch, Python) takes 4.8 ms for 0.224 mAP50-95. The deployed pipeline is **46% more accurate and also faster** than the baseline.
 
 | Pipeline | Input | mAP50-95 | Latency (ms) | FPS |
 |---|---:|---:|---:|---:|
@@ -130,7 +132,25 @@ Detections are linked across frames by a tracker, and the result is scored with 
 
 Against the baseline (640 + ByteTrack, default thresholds), the tuned pipeline improves every metric: **HOTA 41.6 → 53.2, MOTA 30.7 → 47.3, IDF1 48.5 → 67.0, and ID switches −91% (1,226 → 116).**
 
-> **Caveat:** the threshold was selected on the same validation split reported here, so these validation numbers are optimistic. The selection rule (maximum HOTA → 0.65) is fixed before evaluating on VisDrone2019-MOT **test-dev**, which is used exactly once to confirm the baseline, the ablation and the final configuration.
+The threshold was selected on validation, so these validation numbers are optimistic. The selection rule (maximum HOTA → 0.65) was fixed before touching test-dev.
+
+### Confirmation on the held-out test-dev split
+
+VisDrone2019-MOT test-dev (17 sequences, 6,635 frames, 232,378 evaluated boxes) was evaluated **once**, after every choice above was fixed (`scripts/run_stage4_testdev.sh`):
+
+| Detector | Tracker | Thresholds | HOTA | DetA | AssA | MOTA | IDF1 | ID switches | FPS (Python) |
+|---:|---|---|---:|---:|---:|---:|---:|---:|---:|
+| 640 | ByteTrack | default | 41.0 | 39.6 | 44.0 | 33.2 | 48.7 | 4,911 | 75.0 |
+| 640 | BoT-SORT | default | 45.9 | 41.0 | 53.0 | 34.9 | 56.0 | 3,206 | 55.7 |
+| 1280 | ByteTrack | default | 45.1 | 42.4 | 49.4 | 34.6 | 55.1 | 3,677 | 60.0 |
+| 1280 | BoT-SORT | default | 49.9 | 43.4 | 59.0 | 35.5 | 62.4 | 1,957 | 47.2 |
+| 640 | BoT-SORT | tuned (0.65) | 48.3 | 38.9 | 60.8 | 45.9 | 61.7 | 372 | 58.3 |
+| **1280** | **BoT-SORT** | **tuned (0.65)** | **53.7** | **47.3** | **62.3** | **54.2** | **69.9** | **557** | **48.9** |
+
+- **The validation conclusions hold.** The final configuration scores HOTA 53.7 on test-dev, against 53.2 on validation, so tuning on validation did not overfit.
+- **The gain splits into roughly equal thirds.** Of the +12.7 HOTA over the baseline, camera-motion compensation gives +4.8, the 1280 detector +4.1, and threshold tuning +3.8. The control run confirms the detector still matters after tuning: 640 at the same tuned threshold reaches 48.3 HOTA, against 53.7 for 1280.
+- **Fewer ID switches can also mean fewer objects tracked.** The tuned 640 run has the fewest ID switches (372), but only because its recall collapses to 42.6% (55.5% for 1280). ID-switch counts should always be read next to recall.
+- **The validation MOTA dip does not replicate.** On test-dev the 1280 detector's MOTA is slightly *higher* than 640's at default thresholds (34.6 vs 33.2). The extra false positives seen on validation were partly specific to that split.
 
 ## Plan
 
@@ -139,7 +159,7 @@ Against the baseline (640 + ByteTrack, default thresholds), the tuned pipeline i
 | 1 | Fine-tune YOLO11s on VisDrone-DET at 640 vs 1280 | ✅ |
 | 2 | Export to ONNX / TensorRT FP16 / INT8; accuracy vs latency | ✅ |
 | 3 | C++ engine, fused CUDA pre-processing, per-stage timing, parity | ✅ |
-| 4 | Tracking on VisDrone-MOT: detector × camera-motion ablation, threshold tuning (val) | ✅ (test-dev confirmation pending) |
+| 4 | Tracking on VisDrone-MOT: detector × camera-motion ablation, threshold tuning on val, one-shot test-dev | ✅ |
 | 5 | Multi-threaded pipeline (decode, infer, track in parallel) on real video | planned |
 | Stretch | Jetson Orin deployment with improved INT8; camera calibration | planned |
 
@@ -157,7 +177,8 @@ python scripts/export_and_benchmark.py --weights runs/detect/yolo11s_1280/weight
 bash scripts/run_stage3.sh                             # stage 3: C++ benchmarks + parity (GPU must be idle)
 bash scripts/run_int8_diagnosis.sh                     # multi-threshold parity + noise sensitivity
 bash scripts/run_stage4.sh                             # stage 4: tracking ablation on VisDrone-MOT val
-bash scripts/run_stage4_sweep.sh                       # stage 4b: tracker threshold sweep
+bash scripts/run_stage4_sweep.sh                       # stage 4b: tracker threshold sweep (val)
+bash scripts/run_stage4_testdev.sh                     # stage 4c: one-shot test-dev confirmation
 ```
 
 VisDrone-DET (about 2.3 GB) downloads automatically on the first training run.
@@ -175,4 +196,4 @@ cmake --build build -j
 
 ## Data
 
-[VisDrone2019](https://github.com/VisDrone/VisDrone-Dataset) (Zhu et al., TPAMI 2021). Detection: 6,471 training and 548 validation images, 10 classes. Tracking: VisDrone2019-MOT validation, 7 sequences.
+[VisDrone2019](https://github.com/VisDrone/VisDrone-Dataset) (Zhu et al., TPAMI 2021). Detection: 6,471 training and 548 validation images, 10 classes. Tracking: VisDrone2019-MOT validation (7 sequences) for all development, test-dev (17 sequences) for the final confirmation only.
