@@ -39,15 +39,18 @@ def main() -> None:
     p.add_argument("--imgsz", type=int, required=True)
     p.add_argument("--tracker", required=True, help="bytetrack.yaml or botsort.yaml")
     p.add_argument("--name", required=True)
-    p.add_argument("--visdrone", default="/scratch/ma06314/drone-tracking/datasets/VisDrone-MOT/VisDrone2019-MOT-val")
+    p.add_argument("--split", default="val", help="val or test-dev")
+    p.add_argument("--visdrone", default=None, help="defaults to datasets/VisDrone-MOT/VisDrone2019-MOT-<split>")
     p.add_argument("--eval-root", default="/scratch/ma06314/drone-tracking/mot_eval")
     p.add_argument("--ignore-frac", type=float, default=0.5)
     args = p.parse_args()
 
-    seq_root = Path(args.visdrone) / "sequences"
+    visdrone = args.visdrone or f"/scratch/ma06314/drone-tracking/datasets/VisDrone-MOT/VisDrone2019-MOT-{args.split}"
+    seq_root = Path(visdrone) / "sequences"
     eval_root = Path(args.eval_root)
-    ignored = json.loads((eval_root / "ignored_regions.json").read_text())
-    out_dir = eval_root / "trackers" / "VisDrone-val" / args.name / "data"
+    ignored = json.loads((eval_root / f"ignored_regions_{args.split}.json").read_text())
+    split_dir = eval_root / "trackers" / f"VisDrone-{args.split}"
+    out_dir = split_dir / args.name / "data"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     total_frames, total_time = 0, 0.0
@@ -74,9 +77,9 @@ def main() -> None:
         total_time += dt
         print(f"{args.name} {seq}: {len(frames)} frames, {len(frames) / dt:.1f} FPS", flush=True)
 
-    summary = {"name": args.name, "engine": args.engine, "imgsz": args.imgsz, "tracker": args.tracker,
+    summary = {"name": args.name, "split": args.split, "engine": args.engine, "imgsz": args.imgsz, "tracker": args.tracker,
                "frames": total_frames, "fps_end_to_end_python": round(total_frames / total_time, 1)}
-    (eval_root / "trackers" / "VisDrone-val" / args.name / "run.json").write_text(json.dumps(summary, indent=2))
+    (split_dir / args.name / "run.json").write_text(json.dumps(summary, indent=2))
     print(json.dumps(summary))
 
 
