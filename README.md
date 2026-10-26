@@ -136,7 +136,7 @@ The threshold was selected on validation, so these validation numbers are optimi
 
 ### Confirmation on the held-out test-dev split
 
-VisDrone2019-MOT test-dev (17 sequences, 6,635 frames, 232,378 evaluated boxes) was evaluated **once**, after every choice above was fixed (`scripts/run_stage4_testdev.sh`):
+VisDrone2019-MOT test-dev (17 sequences, 232,378 evaluated boxes) was evaluated **once**, after every choice above was fixed (`scripts/run_stage4_testdev.sh`):
 
 | Detector | Tracker | Thresholds | HOTA | DetA | AssA | MOTA | IDF1 | ID switches | FPS (Python) |
 |---:|---|---|---:|---:|---:|---:|---:|---:|---:|
