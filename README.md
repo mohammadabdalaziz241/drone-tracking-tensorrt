@@ -2,6 +2,11 @@
 
 > **Status:** stages 1–4 complete (detection, TensorRT export, C++/CUDA engine, tracking confirmed on a held-out test set). Stage 5, a multi-threaded C++ tracking pipeline, is in progress.
 
+<p align="center">
+  <img src="docs/media/demo.gif" width="720" alt="Tracking pedestrians and vehicles from a moving drone at night: coloured boxes with persistent IDs and motion trails">
+  <br><em>Final pipeline on a VisDrone-MOT validation sequence: YOLO11s (1280 px, TensorRT FP16) + BoT-SORT with camera-motion compensation. Colours are track IDs; lines are recent trajectories.</em>
+</p>
+
 Detecting and tracking small objects (pedestrians, vehicles) in aerial drone video is hard: objects are often under 32×32 pixels, crowded, and seen from unusual angles. This project builds the full pipeline, from fine-tuning a detector to a deployed C++/CUDA TensorRT engine, and measures what every step gains and costs.
 
 ## Headline
@@ -179,6 +184,7 @@ bash scripts/run_int8_diagnosis.sh                     # multi-threshold parity 
 bash scripts/run_stage4.sh                             # stage 4: tracking ablation on VisDrone-MOT val
 bash scripts/run_stage4_sweep.sh                       # stage 4b: tracker threshold sweep (val)
 bash scripts/run_stage4_testdev.sh                     # stage 4c: one-shot test-dev confirmation
+python scripts/make_demo.py --gif-width 480 --gif-frames 90 --gif-every 3   # demo MP4 + GIF
 ```
 
 VisDrone-DET (about 2.3 GB) downloads automatically on the first training run.
