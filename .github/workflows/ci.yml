@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-tests:
+    name: Python tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install test dependencies
+        run: python -m pip install "numpy>=2,<3" "pytest==9.2.0"
+      - name: Run pytest
+        run: python -m pytest tests -v
+
+  cpp-unit-tests:
+    name: C++ unit tests (CPU)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Configure (no CUDA, no TensorRT)
+        run: cmake -S cpp -B build -DDRONE_TRT_BUILD_RUNTIME=OFF -DDRONE_TRT_BUILD_TESTS=ON
+      - name: Build
+        run: cmake --build build -j
+      - name: Run GoogleTest
+        run: ctest --test-dir build --output-on-failure
+
+  cpp-compile:
+    # Compiles every C++ and CUDA source of trt_bench on a runner without a GPU. Objects are
+    # built but not linked, so the TensorRT runtime libraries are not needed; running the
+    # benchmark still requires a GPU (see README, "Run it yourself").
+    name: C++/CUDA compile check (no GPU)
+    runs-on: ubuntu-24.04
+    env:
+      TENSORRT_TAG: v11.4  # headers matching tensorrt-cu12==11.4.0.106 in requirements.txt
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install OpenCV and the CUDA compiler
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q libopencv-dev
+          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update -q
+          CUDA_VER=$(apt-cache search --names-only '^cuda-nvcc-12-[0-9]+$' | awk '{print $1}' | sort -V | tail -1 | sed 's/cuda-nvcc-//')
+          echo "Using CUDA $CUDA_VER"
+          sudo apt-get install -y -q --no-install-recommends cuda-nvcc-$CUDA_VER cuda-cudart-dev-$CUDA_VER
+          echo "/usr/local/cuda-${CUDA_VER/-/.}/bin" >> "$GITHUB_PATH"
+      - name: Fetch TensorRT headers
+        run: |
+          git clone -q --depth 1 --branch "$TENSORRT_TAG" --filter=blob:none --sparse \
+            https://github.com/NVIDIA/TensorRT.git trt
+          git -C trt sparse-checkout set include
+          test -f trt/include/NvInfer.h
+      - name: Configure
+        run: |
+          nvcc --version
+          # TRT_LIB is pre-set so configuration does not need the runtime library; nothing is linked.
+          cmake -S cpp -B build -DCMAKE_CUDA_ARCHITECTURES=89 \
+            -DTENSORRT_INCLUDE_DIR="$PWD/trt/include" -DTRT_LIB=/nonexistent/libnvinfer.so
+      - name: Compile all trt_bench sources (no link)
+        run: |
+          cmake --build build --target drone_trt_core -j
+          make -C build src/main.o src/detector.o src/preprocess.o

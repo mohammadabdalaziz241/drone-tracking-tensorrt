@@ -1,5 +1,7 @@
 # Drone small-object detection and tracking with TensorRT
 
+[![CI](https://github.com/mohammadabdalaziz241/drone-tracking-tensorrt/actions/workflows/ci.yml/badge.svg)](https://github.com/mohammadabdalaziz241/drone-tracking-tensorrt/actions/workflows/ci.yml)
+
 > **Status:** stages 1–4 complete (detection, TensorRT export, C++/CUDA engine, tracking confirmed on a held-out test set). Stage 5, a multi-threaded C++ tracking pipeline, is in progress.
 
 <p align="center">
@@ -199,6 +201,21 @@ cmake -S cpp -B build -DCMAKE_CXX_COMPILER=/usr/bin/g++ -DCMAKE_CUDA_HOST_COMPIL
   -DTENSORRT_LIB_DIR=<venv>/lib/python3.12/site-packages/tensorrt_libs
 cmake --build build -j
 ```
+
+### Tests
+
+These run on any machine, without a GPU, and in CI on every push and pull request:
+
+```bash
+pip install numpy "pytest==9.2.0"
+pytest tests                       # parity metric: IoU matrix, greedy matching, agreement
+
+cmake -S cpp -B build-tests -DDRONE_TRT_BUILD_RUNTIME=OFF -DDRONE_TRT_BUILD_TESTS=ON
+cmake --build build-tests -j
+ctest --test-dir build-tests       # C++: decode + class-aware NMS, letterbox geometry, engine header
+```
+
+The C++ letterbox tests check `compute_letterbox` against values produced by Ultralytics' own `LetterBox` formula (ultralytics 8.4.184) for typical VisDrone resolutions at 640 and 1280 px. CI also compiles every C++/CUDA source of `trt_bench` against the TensorRT 11.4 headers on a runner without a GPU; running the engine itself still needs one.
 
 ## Data
 
