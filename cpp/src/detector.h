@@ -8,13 +8,8 @@
 #include <string>
 #include <vector>
 
+#include "postprocess.h"  // Detection, decode_and_nms
 #include "preprocess.cuh"
-
-struct Detection {
-  float x1, y1, x2, y2;  // box in original-image pixels
-  float score;
-  int cls;
-};
 
 // Per-stage latency of one detect() call, in milliseconds.
 struct StageTimes {
