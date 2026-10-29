@@ -1,0 +1,32 @@
+drone-tracking-tensorrt
+Copyright (C) 2026 Mohammad Abdalaziz
+
+The source code in this repository is licensed under the GNU Affero General
+Public License, version 3 (see LICENSE).
+
+Why AGPL-3.0
+------------
+The Python training, export, benchmarking and tracking scripts are built on
+Ultralytics YOLO (ultralytics==8.4.184), which is licensed under AGPL-3.0.
+Ultralytics states that models trained with its software fall under AGPL-3.0
+by default. Using the same licence for the whole repository keeps the code and
+any weights or TensorRT engines released from it under one consistent set of
+terms.
+
+Third-party software (installed as dependencies; not included here)
+-------------------------------------------------------------------
+- Ultralytics YOLO - AGPL-3.0 - https://github.com/ultralytics/ultralytics
+- TrackEval - fetched by scripts/run_stage4.sh; see its repository for terms -
+  https://github.com/JonathonLuiten/TrackEval
+- NVIDIA TensorRT and CUDA, ONNX, ONNX Runtime and OpenCV - each under its own
+  licence
+
+Data
+----
+VisDrone2019 (Zhu et al., "Detection and Tracking Meet Drones Challenge",
+IEEE TPAMI 2021; https://github.com/VisDrone/VisDrone-Dataset) is not
+redistributed in this repository; it is downloaded from its providers. The
+official repository does not state a licence; redistributions of the dataset
+describe it as licensed under CC BY-NC-SA 3.0 (non-commercial). Models trained
+on it, including any weights or TensorRT engines released by this project,
+are provided for non-commercial research use.

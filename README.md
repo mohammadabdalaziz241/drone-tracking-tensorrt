@@ -203,3 +203,7 @@ cmake --build build -j
 ## Data
 
 [VisDrone2019](https://github.com/VisDrone/VisDrone-Dataset) (Zhu et al., TPAMI 2021). Detection: 6,471 training and 548 validation images, 10 classes. Tracking: VisDrone2019-MOT validation (7 sequences) for all development, test-dev (17 sequences) for the final confirmation only.
+
+## Licence
+
+Code: [GNU AGPL-3.0](LICENSE), matching Ultralytics YOLO, which the training and export scripts are built on. VisDrone is not redistributed here; models trained on it, including released weights and engines, are for non-commercial research use. Details and third-party terms: [NOTICE](NOTICE).
